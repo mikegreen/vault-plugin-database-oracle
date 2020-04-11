@@ -1,0 +1,25 @@
+version: 2
+jobs:
+  build:
+    branches:
+        only:
+          - test/ci-build
+    machine:
+        docker_layer_caching: true
+    environment:
+        TEST_RESULTS: /tmp/test-results
+    steps:
+    - checkout
+    - run:
+        name: "Build package"
+        command: |
+            make build-in-container
+    - run:
+        name: "Run tests"
+        command: |
+            make test-in-container
+    # save build to CircleCI
+    - store_artifacts:
+        path: pkg
+    - store_test_results:
+        path: test-results
