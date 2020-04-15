@@ -57,7 +57,7 @@ build-in-container: build-cross-image
 test-in-container: build-cross-image
 	docker run --rm \
 	-v /var/run/docker.sock:/var/run/docker.sock \
-	-v $(CURDIR)/test-results:/go/src/github.com/hashicorp/vault-plugin-database-oracle/test-results \
+	-v $(CURDIR)/test-results/go:/go/src/github.com/hashicorp/vault-plugin-database-oracle/test-results/go \
 	-e RUN_IN_CONTAINER=1 cross-image:latest \
     make test-ci
 
