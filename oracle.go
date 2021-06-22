@@ -5,16 +5,19 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
+	oci "github.com/mattn/go-oci8"
+
+	LOG "github.com/hashicorp/go-hclog"
 	dbplugin "github.com/hashicorp/vault/sdk/database/dbplugin/v5"
 	"github.com/hashicorp/vault/sdk/database/helper/connutil"
 	"github.com/hashicorp/vault/sdk/database/helper/dbutil"
 	"github.com/hashicorp/vault/sdk/helper/dbtxn"
 	"github.com/hashicorp/vault/sdk/helper/strutil"
 	"github.com/hashicorp/vault/sdk/helper/template"
-	_ "github.com/mattn/go-oci8"
 )
 
 const (
@@ -36,24 +39,48 @@ var _ dbplugin.Database = (*Oracle)(nil)
 type Oracle struct {
 	*connutil.SQLConnectionProducer
 	usernameProducer template.StringTemplate
+	logger           LOG.Logger
 }
 
 func New() (interface{}, error) {
-	db := new()
+	loggerOpts := &LOG.LoggerOptions{
+		Level:      LOG.Info,
+		Output:     LOG.DefaultOutput,
+		JSONFormat: true,
+	}
+	logger := LOG.New(loggerOpts)
+	db := new(logger)
 	// Wrap the plugin with middleware to sanitize errors
 	dbType := dbplugin.NewDatabaseErrorSanitizerMiddleware(db, db.secretValues)
 	return dbType, nil
 }
 
-func new() *Oracle {
+func new(logger LOG.Logger) *Oracle {
 	connProducer := &connutil.SQLConnectionProducer{}
 	connProducer.Type = oracleTypeName
 
 	dbType := &Oracle{
 		SQLConnectionProducer: connProducer,
+		logger:                logger,
 	}
 
 	return dbType
+}
+
+func (o *Oracle) log(msg string, v ...interface{}) {
+	dsn, err := oci.ParseDSN(o.SQLConnectionProducer.ConnectionURL)
+	if err == nil {
+		host := dsn.Connect
+		for k, v := range o.secretValues() {
+			host = strings.ReplaceAll(host, k, v)
+		}
+		v = append(v, "connection_host", host)
+	} else {
+		v = append(v, "connection_host", "unable to retrieve connection host", "connection_host_err", err)
+	}
+
+	v = append(v, "pid", os.Getpid())
+	o.logger.Info(msg, v...)
 }
 
 func (o *Oracle) Initialize(ctx context.Context, req dbplugin.InitializeRequest) (dbplugin.InitializeResponse, error) {
@@ -83,12 +110,14 @@ func (o *Oracle) Initialize(ctx context.Context, req dbplugin.InitializeRequest)
 	resp := dbplugin.InitializeResponse{
 		Config: req.Config,
 	}
+	o.log("Oracle plugin initialized")
 	return resp, nil
 }
 
 func (o *Oracle) NewUser(ctx context.Context, req dbplugin.NewUserRequest) (dbplugin.NewUserResponse, error) {
 	statements := removeEmpty(req.Statements.Commands)
 	if len(statements) == 0 {
+		o.log("Failed to create Oracle dynamic user: missing creation statements")
 		return dbplugin.NewUserResponse{}, dbutil.ErrEmptyCreationStatement
 	}
 
@@ -97,22 +126,26 @@ func (o *Oracle) NewUser(ctx context.Context, req dbplugin.NewUserRequest) (dbpl
 
 	username, err := o.usernameProducer.Generate(req.UsernameConfig)
 	if err != nil {
+		o.log("Failed to create Oracle dynamic user: failed to create username from template", "err", err)
 		return dbplugin.NewUserResponse{}, fmt.Errorf("failed to generate username: %w", err)
 	}
 
 	db, err := o.getConnection(ctx)
 	if err != nil {
+		o.log("Failed to create Oracle dynamic user: failed to create/retrieve connection", "err", err)
 		return dbplugin.NewUserResponse{}, fmt.Errorf("failed to get connection: %w", err)
 	}
 
 	err = newUser(ctx, db, username, req.Password, req.Expiration, req.Statements.Commands)
 	if err != nil {
+		o.log("Failed to create Oracle dynamic user: failed to execute creation statements", "err", err)
 		return dbplugin.NewUserResponse{}, err
 	}
 
 	resp := dbplugin.NewUserResponse{
 		Username: username,
 	}
+	o.log("Successfully created Oracle dynamic user")
 	return resp, nil
 }
 
@@ -172,8 +205,10 @@ func (o *Oracle) UpdateUser(ctx context.Context, req dbplugin.UpdateUserRequest)
 	if req.Password != nil {
 		err := o.changeUserPassword(ctx, req.Username, req.Password.NewPassword, req.Password.Statements.Commands)
 		if err != nil {
+			o.log("Failed to change user's password", "err", err)
 			return dbplugin.UpdateUserResponse{}, fmt.Errorf("failed to change password: %w", err)
 		}
+		o.log("Successfully changed user's password")
 		return dbplugin.UpdateUserResponse{}, nil
 	}
 	// Expiration change is a no-op
@@ -237,11 +272,13 @@ func (o *Oracle) DeleteUser(ctx context.Context, req dbplugin.DeleteUserRequest)
 
 	db, err := o.getConnection(ctx)
 	if err != nil {
+		o.log("Failed to delete user: unable to create/retrieve connection", "err", err)
 		return dbplugin.DeleteUserResponse{}, fmt.Errorf("failed to make connection: %w", err)
 	}
 
 	tx, err := db.Begin()
 	if err != nil {
+		o.log("Failed to delete user: failed to start transaction", "err", err)
 		return dbplugin.DeleteUserResponse{}, fmt.Errorf("failed to start transaction: %w", err)
 	}
 	// Effectively a no-op if the transaction commits successfully
@@ -249,6 +286,7 @@ func (o *Oracle) DeleteUser(ctx context.Context, req dbplugin.DeleteUserRequest)
 
 	err = o.disconnectSession(db, req.Username)
 	if err != nil {
+		o.log("Failed to delete user: failed to disconnect user", "err", err)
 		return dbplugin.DeleteUserResponse{}, fmt.Errorf("failed to disconnect user %s: %w", req.Username, err)
 	}
 
@@ -271,11 +309,13 @@ func (o *Oracle) DeleteUser(ctx context.Context, req dbplugin.DeleteUserRequest)
 			}
 
 			if err := dbtxn.ExecuteTxQuery(ctx, tx, m, query); err != nil {
+				o.log("Failed to delete user: failed to execute query", "err", err)
 				return dbplugin.DeleteUserResponse{}, fmt.Errorf("failed to execute query: %w", err)
 			}
 		}
 	}
 
+	o.log("Successfully deleted Oracle user")
 	return dbplugin.DeleteUserResponse{}, nil
 }
 
@@ -346,4 +386,10 @@ func (o *Oracle) getConnection(ctx context.Context) (*sql.DB, error) {
 	}
 
 	return db.(*sql.DB), nil
+}
+
+func (o *Oracle) Close() error {
+	o.log("Shutting down")
+	err := o.SQLConnectionProducer.Close()
+	return err
 }
