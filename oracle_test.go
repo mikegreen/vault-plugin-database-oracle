@@ -91,7 +91,7 @@ func TestOracle_Initialize(t *testing.T) {
 	connURL, cleanup := prepareOracleTestContainer(t)
 	t.Cleanup(cleanup)
 
-	db := new()
+	db := new(nil)
 	defer dbtesting.AssertClose(t, db)
 
 	expectedConfig := map[string]interface{}{
@@ -184,7 +184,7 @@ func TestOracle_NewUser(t *testing.T) {
 			connURL, cleanup := prepareOracleTestContainer(t)
 			t.Cleanup(cleanup)
 
-			db := new()
+			db := new(nil)
 			defer dbtesting.AssertClose(t, db)
 
 			initReq := dbplugin.InitializeRequest{
@@ -240,7 +240,7 @@ func TestOracle_RenewUser(t *testing.T) {
 	connURL, cleanup := prepareOracleTestContainer(t)
 	t.Cleanup(cleanup)
 
-	db := new()
+	db := new(nil)
 	defer dbtesting.AssertClose(t, db)
 
 	initReq := dbplugin.InitializeRequest{
@@ -316,7 +316,7 @@ func TestOracle_RevokeUser(t *testing.T) {
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			db := new()
+			db := new(nil)
 			defer dbtesting.AssertClose(t, db)
 
 			initReq := dbplugin.InitializeRequest{
@@ -514,7 +514,7 @@ func TestUpdateUser_ChangePassword(t *testing.T) {
 			connURL, cleanup := prepareOracleTestContainer(t)
 			t.Cleanup(cleanup)
 
-			db := new()
+			db := new(nil)
 
 			initReq := dbplugin.InitializeRequest{
 				Config: map[string]interface{}{

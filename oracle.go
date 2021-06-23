@@ -68,6 +68,9 @@ func new(logger LOG.Logger) *Oracle {
 }
 
 func (o *Oracle) log(msg string, v ...interface{}) {
+	if o.logger == nil {
+		return
+	}
 	dsn, err := oci.ParseDSN(o.SQLConnectionProducer.ConnectionURL)
 	if err == nil {
 		host := dsn.Connect
