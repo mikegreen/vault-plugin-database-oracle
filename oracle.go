@@ -72,6 +72,9 @@ func (o *Oracle) log(msg string, v ...interface{}) {
 	if err == nil {
 		host := dsn.Connect
 		for k, v := range o.secretValues() {
+			if k == "" {
+				continue
+			}
 			host = strings.ReplaceAll(host, k, v)
 		}
 		v = append(v, "connection_host", host)
